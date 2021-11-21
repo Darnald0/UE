@@ -29,6 +29,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category=Camera)
 	float BaseLookUpRate;
 
+
 protected:
 
 	/** Resets HMD orientation in VR. */
@@ -58,15 +59,40 @@ protected:
 	/** Handler for when a touch input stops. */
 	void TouchStopped(ETouchIndex::Type FingerIndex, FVector Location);
 
+	void OnInteract();
+
+
+
 protected:
 	// APawn interface
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	// End of APawn interface
 
 public:
+	virtual void Tick(float DeltaTime) override;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Player)
+		float PlayerHealth;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Player)
+		bool IsHolding;
+
 	/** Returns CameraBoom subobject **/
 	FORCEINLINE class USpringArmComponent* GetCameraBoom() const { return CameraBoom; }
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Player)
+	class APickUp* CurrentItem;
+
+	void GetDamage(float Damage);
+	void HealDamage(float Heal);
+	void CheckHealth();
+	void KillPlayer();
+	void DelayKill();
+
+	FHitResult Hit;
+	FComponentQueryParams DefaultComponentQueryParams;
+	FCollisionResponseParams DefaultResponseParam;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Player)
+	USceneComponent* HoldingZone;
 };
 

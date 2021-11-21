@@ -8,12 +8,19 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "DrawDebugHelpers.h"
+#include "PickUp.h"
+#include "GameFramework/GameModeBase.h"
+#include "GameFramework/PlayerStart.h"
+#include "Kismet/GameplayStatics.h"
 
 //////////////////////////////////////////////////////////////////////////
 // AScriptProjectCharacter
 
 AScriptProjectCharacter::AScriptProjectCharacter()
 {
+	PrimaryActorTick.bCanEverTick = true;
+
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 
@@ -45,6 +52,11 @@ AScriptProjectCharacter::AScriptProjectCharacter()
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named MyCharacter (to avoid direct content references in C++)
+
+	HoldingZone = CreateDefaultSubobject<USceneComponent>(TEXT("Holding Zone"));
+	HoldingZone->SetupAttachment(RootComponent);
+	FVector HoldLocation(100, 0, 0);
+	HoldingZone->SetRelativeLocation(HoldLocation);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -74,8 +86,111 @@ void AScriptProjectCharacter::SetupPlayerInputComponent(class UInputComponent* P
 
 	// VR headset functionality
 	PlayerInputComponent->BindAction("ResetVR", IE_Pressed, this, &AScriptProjectCharacter::OnResetVR);
+
+	PlayerInputComponent->BindAction("Interact", IE_Pressed, this, &AScriptProjectCharacter::OnInteract);
 }
 
+void AScriptProjectCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+	
+	if (IsHolding && CurrentItem != nullptr)
+	{
+		CurrentItem->SetActorLocation(HoldingZone->GetComponentLocation());
+	}
+}
+
+void AScriptProjectCharacter::GetDamage(float Damage)
+{
+	GLog->Log("TakeDamage");
+	GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("take damage"));
+	this->PlayerHealth = this->PlayerHealth - Damage;
+
+	CheckHealth();
+}
+
+void AScriptProjectCharacter::HealDamage(float Heal)
+{
+	GLog->Log("heal");
+	GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("heal"));
+	this->PlayerHealth = this->PlayerHealth + Heal;
+
+	CheckHealth();
+}
+
+void AScriptProjectCharacter::CheckHealth()
+{
+	FString hp = FString::SanitizeFloat(this->PlayerHealth);
+	GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("Health " + hp));
+	if (this->PlayerHealth <= 0)
+	{
+		DelayKill();
+	}
+}
+
+void AScriptProjectCharacter::DelayKill()
+{
+	GLog->Log("Delay kill");
+	GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("delay kill start"));
+	SetActorHiddenInGame(true);
+	FTimerHandle TimerHandle;
+
+	GLog->Log("After 3sec");
+	GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("3 seconds"));
+	TArray<AActor*> FoundActors;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlayerStart::StaticClass(), FoundActors);
+
+	auto PlayerStart = Cast<APlayerStart>(FoundActors[0]);
+	auto PlayerController = this->GetController();
+
+	PlayerController->UnPossess();
+	auto PlayerClass = this->GetClass();
+	GLog->Log("Lose control");
+	GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("lose control"));
+
+	auto NewCharacter = GetWorld()->SpawnActor<AActor>(PlayerClass, PlayerStart->GetActorLocation(), PlayerStart->GetActorRotation());
+	GetWorld()->GetTimerManager().SetTimer(TimerHandle, [&]()
+	{
+
+		if (NewCharacter)
+		{
+			auto CharacterToPossess = Cast<ACharacter>(NewCharacter);
+			if (CharacterToPossess)
+			{
+				GLog->Log("New body");
+				GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("new body"));
+				PlayerController->Possess(CharacterToPossess);
+				this->Destroy();
+				GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("destroy"));
+				GLog->Log("destroy");
+			}
+		}
+	}, 3, false);
+}
+
+void AScriptProjectCharacter::KillPlayer()
+{
+	TArray<AActor*> FoundActors;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlayerStart::StaticClass(), FoundActors);
+	auto PlayerStart = Cast<APlayerStart>(FoundActors[0]);
+	auto PlayerController = this->GetController();
+	PlayerController->UnPossess();
+	auto PlayerClass = this->GetClass();
+
+	auto NewCharacter = GetWorld()->SpawnActor<AActor>(PlayerClass, PlayerStart->GetActorLocation(), PlayerStart->GetActorRotation());
+
+	if (NewCharacter)
+	{
+		auto CharacterToPossess = Cast<ACharacter>(NewCharacter);
+		if (CharacterToPossess)
+		{
+			PlayerController->Possess(CharacterToPossess);
+			this->Destroy();
+		}
+	}
+	//GetWorld()->GetAuthGameMode()->RestartPlayerAtPlayerStart();
+	//AGameModeBase::RestartPlayerAtPlayerStart();
+}
 
 void AScriptProjectCharacter::OnResetVR()
 {
@@ -136,5 +251,48 @@ void AScriptProjectCharacter::MoveRight(float Value)
 		const FVector Direction = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 		// add movement in that direction
 		AddMovementInput(Direction, Value);
+	}
+}
+
+void AScriptProjectCharacter::OnInteract() 
+{
+	if (!IsHolding)
+	{
+		auto Start = FollowCamera->GetComponentLocation();
+		auto ForwardVector = FollowCamera->GetForwardVector();
+		auto End = ((ForwardVector * 1000.f) + Start);
+
+		DrawDebugLine(GetWorld(), Start, End, FColor::Red, false, 100, 0, 1);
+
+		if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, DefaultComponentQueryParams, DefaultResponseParam))
+		{
+			auto HitActor = Hit.GetActor()->GetClass()->GetDefaultObject();
+			APickUp* Obj = Cast<APickUp>(HitActor);
+
+			if (Obj == nullptr) 
+			{
+				GLog->Log("null");
+				return;
+			}
+
+			CurrentItem = Obj;
+			//Obj->PlayerRef = this;
+			Obj->DisablePhysics();
+			Obj->IsGettingHold = true;
+			//CurrentItem->MyMesh->CanEditSimulatePhysics();
+			//CurrentItem->MyMesh->SetSimulatePhysics(false);
+
+			IsHolding = true;
+		}
+	}
+	else 
+	{
+		//CurrentItem->MyMesh->CanEditSimulatePhysics();
+		//CurrentItem->MyMesh->SetSimulatePhysics(true);
+		CurrentItem->IsGettingHold = false;
+		CurrentItem->EnablePhysics();
+		//CurrentItem->PlayerRef;
+		CurrentItem;
+		IsHolding = false;
 	}
 }
